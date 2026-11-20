@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import math
+import random
 import statistics
 import time
 
 from algoselect.graphs import GraphInstance
+
 
 
 STRUCTURAL = (
@@ -63,10 +65,19 @@ def _components(adj: list[list[tuple[int, int]]]) -> tuple[int, int, int]:
     return count, largest, isolated
 
 
-def _clustering(adj: list[list[tuple[int, int]]]) -> float:
+def _clustering(adj: list[list[tuple[int, int]]], *, sample_cap: int = 48, seed: int = 0) -> float:
+    """Local clustering on a vertex sample so feature cost stays below algorithm gaps."""
+    n = len(adj)
+    if n == 0:
+        return 0.0
     neighbor_sets = [set(v for v, _w in nbrs) for nbrs in adj]
+    if n <= sample_cap:
+        indices = range(n)
+    else:
+        indices = random.Random(seed).sample(range(n), sample_cap)
     coeffs: list[float] = []
-    for u, nbrs in enumerate(neighbor_sets):
+    for u in indices:
+        nbrs = neighbor_sets[u]
         k = len(nbrs)
         if k < 2:
             continue
@@ -128,7 +139,8 @@ def extract(graph: GraphInstance) -> dict[str, float]:
         "isolated_nodes": float(isolated),
         "components": float(components),
         "largest_component": float(largest),
-        "clustering": _clustering(graph.adj),
+        "clustering": _clustering(graph.adj, seed=graph.seed),
+
         "degree_p50": q(0.5),
         "degree_p90": q(0.9),
         "bfs_depth": _bfs_depth(graph.adj),

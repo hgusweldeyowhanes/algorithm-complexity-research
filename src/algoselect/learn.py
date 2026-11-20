@@ -95,7 +95,8 @@ class LinearLog:
         Z = self.scale.transform(X)
         A = np.column_stack([np.ones(len(Z)), np.asarray(Z, dtype=float)])
         logged = A @ self.w
-        return [max(0.0, float(10 ** z) - self.eps) for z in logged]
+        # Clamp log-space predictions so size-shift extrapolation cannot overflow.
+        return [max(0.0, float(10 ** float(min(6.0, max(-6.0, z)))) - self.eps) for z in logged]
 
     def coefficients(self) -> list[float]:
         return [float(v) for v in self.w[1:]]

@@ -105,33 +105,39 @@ def bellman_ford(
 def dial(adj: list[list[tuple[int, int]]], source: int, max_weight: int) -> list[float]:
     """
     Dial's bucket Dijkstra for nonnegative integer weights bounded by C.
-    Time is O(E + V*C) in the circular-bucket form; this uses buckets up to n*C.
+    Circular buckets of size C+1; time O(E + V*C).
     """
     n = len(adj)
     if not 0 <= source < n:
         raise ValueError("Invalid source node")
     if max_weight < 0:
         raise ValueError("Dial requires nonnegative weights")
-    limit = n * max(max_weight, 0) + 1
+    bucket_count = max(max_weight, 0) + 1
     distances = [inf] * n
     distances[source] = 0
-    buckets: list[list[int]] = [[] for _ in range(limit)]
+    buckets: list[list[int]] = [[] for _ in range(bucket_count)]
     buckets[0].append(source)
-    index = 0
-    while index < limit:
-        if not buckets[index]:
-            index += 1
+    distance = 0
+    empty_streak = 0
+    while empty_streak <= max_weight:
+        bucket = distance % bucket_count
+        if not buckets[bucket]:
+            empty_streak += 1
+            distance += 1
             continue
-        u = buckets[index].pop()
-        if distances[u] != index:
-            continue
-        for v, weight in adj[u]:
-            if weight < 0:
-                raise ValueError("Dial cannot handle negative weights")
-            new_distance = distances[u] + weight
-            if new_distance < distances[v] and new_distance < limit:
-                distances[v] = new_distance
-                buckets[new_distance].append(v)
+        empty_streak = 0
+        while buckets[bucket]:
+            u = buckets[bucket].pop()
+            if distances[u] != distance:
+                continue
+            for v, weight in adj[u]:
+                if weight < 0:
+                    raise ValueError("Dial cannot handle negative weights")
+                new_distance = distances[u] + weight
+                if new_distance < distances[v]:
+                    distances[v] = new_distance
+                    buckets[int(new_distance) % bucket_count].append(v)
+        distance += 1
     return distances
 
 

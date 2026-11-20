@@ -185,14 +185,33 @@ def load_edge_list(path: str, *, graph_id: str = "edge-list") -> GraphInstance:
 
 
 def portfolio(*, seed: int = 1) -> list[GraphInstance]:
-    """Local-PC portfolio: two sizes, two densities, five families, plus unweighted ER."""
+    """Local-PC portfolio sized so algorithms diverge: sparse, dense, low-C, unweighted."""
     graphs: list[GraphInstance] = []
-    for n in (40, 80):
+    # Sparse / mid weight — heap often wins.
+    for n in (80, 200, 400):
         for degree in (4, 8):
-            graphs.append(erdos_renyi(n, degree, seed=seed))
-            graphs.append(barabasi_albert(n, degree, seed=seed))
-            graphs.append(watts_strogatz(n, degree, seed=seed))
-            graphs.append(random_geometric(n, degree, seed=seed))
-        graphs.append(grid_graph(n if n != 40 else 36, seed=seed))
+            graphs.append(erdos_renyi(n, degree, seed=seed, weight_hi=50))
+            graphs.append(barabasi_albert(n, degree, seed=seed, weight_hi=50))
+            graphs.append(watts_strogatz(n, degree, seed=seed, weight_hi=50))
+            graphs.append(random_geometric(n, degree, seed=seed, weight_hi=50))
+        graphs.append(grid_graph(81 if n == 80 else n, seed=seed, weight_hi=50))
+    # Dial-friendly: tiny integer bound, sparse, larger n (circular buckets O(E+VC)).
+    for n in (120, 250, 500):
+        graphs.append(erdos_renyi(n, 3, seed=seed + 7, weight_hi=1))
+        graphs.append(erdos_renyi(n, 4, seed=seed + 8, weight_hi=2))
+        graphs.append(barabasi_albert(n, 3, seed=seed + 7, weight_hi=1))
+        graphs.append(grid_graph(n, seed=seed + 7, weight_hi=1))
+    # Unweighted — BFS should beat heap Dijkstra.
+    for n in (80, 160, 320, 480):
         graphs.append(erdos_renyi(n, 4, seed=seed + 3, unweighted=True))
+        graphs.append(erdos_renyi(n, 6, seed=seed + 4, unweighted=True))
+        ba = barabasi_albert(n, 4, seed=seed + 5, weight_hi=1)
+        ba.unweighted = True
+        ba.graph_id = f"{ba.graph_id}-uw"
+        graphs.append(ba)
+    # Dense — array Dijkstra asymptotic regime (skip huge BF by keeping n<=220).
+    for n in (120, 180, 220):
+        degree = max(20.0, 0.55 * (n - 1))
+        graphs.append(erdos_renyi(n, degree, seed=seed, weight_hi=10))
+        graphs.append(erdos_renyi(n, degree, seed=seed + 11, weight_hi=10))
     return graphs

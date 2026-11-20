@@ -8,15 +8,23 @@ from algoselect.graphs import GraphInstance
 
 
 def rule_based(graph: GraphInstance, feats: dict[str, float]) -> str:
-    """Hand rule from the usual complexity regimes. Documented, not learned."""
+    """Hand rule from measured regimes: BFS / low-C Dial / else heap.
+
+    Array Dijkstra is omitted: on this CPython harness it does not beat the
+    binary-heap implementation at the sizes we can finish locally.
+    """
     names = feasible(graph)
     if "bfs" in names and graph.unweighted:
         return "bfs"
     if feats["weight_min"] < 0:
         return "bellman_ford"
-    if feats["density"] >= 0.2 and "dijkstra_array" in names:
-        return "dijkstra_array"
-    if feats["weight_bound"] <= 15 and feats["density"] < 0.08 and "dial" in names:
+    # Dial with circular buckets wins when C is tiny and the graph is sparse.
+    if (
+        feats["weight_bound"] <= 2
+        and feats["average_degree"] <= 8
+        and feats["density"] < 0.08
+        and "dial" in names
+    ):
         return "dial"
     if "dijkstra_heap" in names:
         return "dijkstra_heap"
@@ -44,6 +52,27 @@ def predict_then_select(model, graph: GraphInstance, feats: dict[str, float], na
     rows = [design_row(feats, names, algo) for algo in candidates]
     preds = model.predict(rows)
     return candidates[min(range(len(candidates)), key=lambda i: preds[i])]
+
+
+def gated_predict_then_select(
+    model,
+    graph: GraphInstance,
+    feats: dict[str, float],
+    names: tuple[str, ...],
+    feature_ms: float,
+) -> str:
+    """Use the predicted best algo only when predicted savings exceed feature cost."""
+    candidates = feasible(graph)
+    rows = [design_row(feats, names, algo) for algo in candidates]
+    preds = model.predict(rows)
+    best_i = min(range(len(candidates)), key=lambda i: preds[i])
+    chosen = candidates[best_i]
+    if "dijkstra_heap" not in candidates or chosen == "dijkstra_heap":
+        return chosen
+    heap_pred = preds[candidates.index("dijkstra_heap")]
+    if heap_pred - preds[best_i] <= feature_ms:
+        return "dijkstra_heap"
+    return chosen
 
 
 def memory_constrained(time_model, mem_model, graph, feats, names, reference: str = "dijkstra_heap") -> str:

@@ -5,7 +5,8 @@ import pytest
 from algoselect.algorithms import bellman_ford, bfs_shortest_paths, dial, dijkstra_array, dijkstra_heap
 from algoselect.benchmark import feasible, results_match, run_algorithm
 from algoselect.features import FULL, extract
-from algoselect.graphs import erdos_renyi, grid_graph
+from algoselect.graphs import erdos_renyi, grid_graph, portfolio
+from algoselect.selection import rule_based
 
 
 def _path_graph():
@@ -61,3 +62,14 @@ def test_unweighted_admits_bfs_and_grid_connects():
     grid = grid_graph(9, seed=1)
     assert grid.m_undirected >= 8
     assert all(math_dist < inf for math_dist in run_algorithm("dijkstra_heap", grid))
+
+
+def test_portfolio_covers_selection_regimes():
+    graphs = portfolio(seed=2)
+    assert max(g.n for g in graphs) >= 400
+    dense = [g for g in graphs if extract(g)["density"] >= 0.12]
+    unweighted = [g for g in graphs if g.unweighted]
+    low_c = [g for g in graphs if not g.unweighted and extract(g)["weight_bound"] <= 2]
+    assert dense and unweighted and low_c
+    assert rule_based(unweighted[0], extract(unweighted[0])) == "bfs"
+    assert rule_based(low_c[0], extract(low_c[0])) == "dial"

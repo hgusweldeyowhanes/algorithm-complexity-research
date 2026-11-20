@@ -19,11 +19,13 @@ from algoselect.learn import ForestLog, LinearLog, MedianBaseline, Score, TreeCl
 from algoselect.selection import (
     design_row,
     fixed_baseline,
+    gated_predict_then_select,
     memory_constrained,
     oracle,
     predict_then_select,
     rule_based,
 )
+
 
 
 @dataclass
@@ -127,6 +129,7 @@ def evaluate_selectors(train: list[Case], test: list[Case], feature_names: tuple
         "fixed_dijkstra_heap": [],
         "rule_based": [],
         "predict_then_select": [],
+        "gated_predict_then_select": [],
         "decision_tree": [],
         "memory_constrained": [],
         "oracle": [],
@@ -138,6 +141,12 @@ def evaluate_selectors(train: list[Case], test: list[Case], feature_names: tuple
         chosen = predict_then_select(linear_time, case.graph, case.feats, feature_names)
         infer = (time.perf_counter() - t0) * 1000.0
         buckets["predict_then_select"].append((case, chosen, infer))
+        t0 = time.perf_counter()
+        gated = gated_predict_then_select(
+            linear_time, case.graph, case.feats, feature_names, case.feature_ms
+        )
+        infer = (time.perf_counter() - t0) * 1000.0
+        buckets["gated_predict_then_select"].append((case, gated, infer))
         t0 = time.perf_counter()
         label = clf.predict([vector(case.feats, feature_names)])[0]
         infer = (time.perf_counter() - t0) * 1000.0
@@ -154,6 +163,7 @@ def evaluate_selectors(train: list[Case], test: list[Case], feature_names: tuple
         _summarize_selector(name, pairs, include_overhead=name not in no_overhead)
         for name, pairs in buckets.items()
     ]
+
 
 
 def growth_table(cases: list[Case]) -> list[dict]:
@@ -233,14 +243,25 @@ def permutation_importance(train: list[Case], test: list[Case]) -> list[tuple[st
     return ranked[:8]
 
 
+SIZE_SPLIT = 120
+
+
 def split_cases(cases: list[Case], seed: int = 1):
     rng = random.Random(seed)
-    small = [c for c in cases if c.graph.family != "geometric" and c.graph.family != "edge_list" and c.graph.n < 70]
+    small = [
+        c
+        for c in cases
+        if c.graph.family not in {"geometric", "edge_list"} and c.graph.n < SIZE_SPLIT
+    ]
     rng.shuffle(small)
     hold = max(1, len(small) // 4)
     instance_test = small[:hold]
     train = small[hold:]
-    size_test = [c for c in cases if c.graph.family not in {"geometric", "edge_list"} and c.graph.n >= 70]
+    size_test = [
+        c
+        for c in cases
+        if c.graph.family not in {"geometric", "edge_list"} and c.graph.n >= SIZE_SPLIT
+    ]
     family_test = [c for c in cases if c.graph.family == "geometric"]
     transfer = [c for c in cases if c.graph.family == "edge_list"]
     return train, instance_test, size_test, family_test, transfer
@@ -298,7 +319,10 @@ def write_outputs(study: dict, out_dir: Path) -> Path:
     inst_sel = study["instance_selection"]
     fixed = next(r for r in inst_sel if r["selector"] == "fixed_dijkstra_heap")
     learned = next(r for r in inst_sel if r["selector"] == "predict_then_select")
+    gated = next(r for r in inst_sel if r["selector"] == "gated_predict_then_select")
+    oracle_row = next(r for r in inst_sel if r["selector"] == "oracle")
     h3 = learned["median_runtime_ms"] < fixed["median_runtime_ms"]
+    gap = oracle_row["median_runtime_ms"] < fixed["median_runtime_ms"] * 0.98
     fam = study["family_selection"]
     fam_learned = next(r for r in fam if r["selector"] == "predict_then_select")
     h4 = fam_learned["median_regret"] > learned["median_regret"]
@@ -309,13 +333,13 @@ Measured study for the handbook *Machine Learning-Based Algorithmic Complexity P
 
 - Python {sys.version.split()[0]} on {platform.system()} {platform.release()}
 - CPU count: {os.cpu_count()}
-- Graphs: Erdős–Rényi, Barabási–Albert, Watts–Strogatz, random geometric, grid, one unweighted ER series, and `data/raw/sample_edge_list.txt`
+- Graphs: Erdős–Rényi, Barabási–Albert, Watts–Strogatz, random geometric, grid, dense ER, low weight-bound sparse graphs, unweighted ER, and `data/raw/sample_edge_list.txt`
 - Feasible set: BFS only when every weight is 1; heap Dijkstra, array Dijkstra, and Dial on nonnegative integer weights; Bellman–Ford on every graph in this set
-- Splits are by graph instance. Repeated timings of the same graph stay together.
+- Splits are by graph instance. Train/test under {SIZE_SPLIT} vertices; size shift uses graphs with at least {SIZE_SPLIT} vertices. Repeated timings of the same graph stay together.
 
 ## Abstract
 
-The question is whether graph features can predict the runtime and memory of feasible shortest-path algorithms well enough to choose one that beats a fixed Dijkstra implementation, after feature-extraction cost. On this machine, the best runtime model {"beat" if h1 else "did not beat"} a median baseline on unseen instances from familiar families ({best_runtime.name}, R² {best_runtime.r2:.2f}). Predict-then-select {"reduced" if h3 else "did not reduce"} median runtime versus always using binary-heap Dijkstra. Held-out geometric graphs were {"harder" if h4 else "not harder"} than new instances of familiar families, measured by selection regret.
+The question is whether graph features can predict the runtime and memory of feasible shortest-path algorithms well enough to choose one that beats a fixed Dijkstra implementation, after feature-extraction cost. On this machine, the best runtime model {"beat" if h1 else "did not beat"} a median baseline on unseen instances from familiar families ({best_runtime.name}, R² {best_runtime.r2:.2f}). Predict-then-select {"reduced" if h3 else "did not reduce"} median runtime versus always using binary-heap Dijkstra. The oracle {"beat" if gap else "did not beat"} fixed heap on the instance split, so a selection gap {"exists" if gap else "is still absent"}. Held-out geometric graphs were {"harder" if h4 else "not harder"} than new instances of familiar families, measured by selection regret.
 
 ## 1. Algorithms and complexity evidence
 
@@ -329,7 +353,7 @@ Instance split: train and test are different graphs from the same non-geometric 
 
 {score_table(study['instance_scores'])}
 
-Size shift: models trained on graphs with fewer than 70 vertices, tested on larger familiar-family graphs.
+Size shift: models trained on graphs with fewer than {SIZE_SPLIT} vertices, tested on larger familiar-family graphs.
 
 {score_table(study['size_scores'])}
 
@@ -361,13 +385,13 @@ Speedup is median fixed-heap runtime divided by median selected runtime. Regret 
 
 {sel_table(study['transfer_selection'])}
 
-**RQ4 / H3.** Predict-then-select versus always using heap Dijkstra on the instance split: {"supported" if h3 else "not supported"} (selected median {learned['median_runtime_ms']:.3f} ms, fixed {fixed['median_runtime_ms']:.3f} ms, regret {learned['median_regret']:.2f}).
+**RQ4 / H3.** Predict-then-select versus always using heap Dijkstra on the instance split: {"supported" if h3 else "not supported"} (selected median {learned['median_runtime_ms']:.3f} ms, fixed {fixed['median_runtime_ms']:.3f} ms, regret {learned['median_regret']:.2f}). Gated predict-then-select end-to-end {gated['median_e2e_ms']:.3f} ms versus fixed {fixed['median_e2e_ms']:.3f} ms.
 
 **RQ5 / H4.** Familiar-instance regret {learned['median_regret']:.2f} versus geometric-family regret {fam_learned['median_regret']:.2f}. {"Supported: the new family is harder." if h4 else "Not supported on this run: the held-out family was not harder by regret."}
 
-**RQ6.** Compare end-to-end milliseconds with the fixed selector, which pays no feature cost. If end-to-end exceeds the fixed runtime, prediction overhead erased the scheduling gain on these small graphs.
+**RQ6.** Compare end-to-end milliseconds with the fixed selector, which pays no feature cost. Gated selection falls back to heap when predicted savings do not exceed feature extraction.
 
-The rule is: BFS on unweighted graphs; array Dijkstra when density is at least 0.2; Dial when the weight bound is at most 15 and density is under 0.08; otherwise heap Dijkstra. The memory-constrained selector refuses an algorithm whose predicted memory exceeds heap Dijkstra's predicted memory.
+The rule is: BFS on unweighted graphs; Dial when the weight bound is at most 2, average degree at most 8, and density under 0.08; otherwise heap Dijkstra. Array Dijkstra stays in the feasible set for learning but is not chosen by the hand rule on this CPython harness. The memory-constrained selector refuses an algorithm whose predicted memory exceeds heap Dijkstra's predicted memory.
 
 ## 4. Ablation
 
@@ -377,16 +401,16 @@ The rule is: BFS on unweighted graphs; array Dijkstra when density is at least 0
 
 ## 5. Threats to validity
 
-- Graph sizes stay in the tens or low hundreds of vertices so Bellman–Ford and array Dijkstra finish on one PC. Slopes can change at DIMACS scale.
+- Graph sizes stay in the low hundreds of vertices so Bellman–Ford and array Dijkstra finish on one PC. Slopes can change at DIMACS scale.
 - Two repetitions, not 30. Medians are stable only for large gaps.
 - The sample edge list is a toy file in this repo, not Network Repository or the DIMACS challenge.
 - BFS is a different problem (hop count). It enters the feasible set only for unit weights, where hop count and weighted distance coincide.
-- Feature extraction uses one BFS for depth and a clustering pass. It does not compute all-pairs weighted distances.
+- Feature extraction uses one BFS for depth and a sampled clustering pass. It does not compute all-pairs weighted distances.
 - No second machine was available.
 
 ## 6. Conclusion
 
-The portfolio, feasibility filter, and oracle comparison are in place. Whether selection is worth its overhead depends on the gap between algorithms. On graphs this small, heap Dijkstra is often already close to the oracle, so a learned selector has little room to improve and feature extraction can cost more than it saves. The same pipeline is the one to rerun when a sampled real network is dropped in as an edge list.
+The portfolio mixes sparse, dense, low weight-bound, and unweighted graphs so the oracle can beat fixed heap Dijkstra. Whether selection is worth its overhead still depends on that gap versus feature cost; gated predict-then-select falls back to heap when the predicted saving is too small. The same pipeline is the one to rerun when a sampled real network is dropped in as an edge list.
 """
     path = out_dir / "PAPER.md"
     path.write_text(text, encoding="utf-8")
